@@ -58,10 +58,12 @@ uint32_t TxMailbox;
 HAL_StatusTypeDef TxStatus;
 uint16_t uSendLimit;
 uint16_t can_rx_counter = 0;
+uint32_t can_sleep = 0;
 typedef struct 
 {
 	uint16_t can_rx;
 	uint16_t can_rx_insec;
+	uint8_t wakeup;
 }counter_t;
 counter_t counter;
 /* USER CODE END PV */
@@ -83,6 +85,12 @@ void HAL_CAN_RxFIFO0MsgPendingCallback(CAN_HandleTypeDef* hcan)
 		rx_buf_FMI[RxHeader.FilterMatchIndex][i] = rx_buf[i];
 	}
 	counter.can_rx++;
+}
+void HAL_CAN_WakeUpFromRxMsgCallback(CAN_HandleTypeDef *hcan)
+{
+	counter.wakeup++;
+	HAL_CAN_WakeUp(hcan);
+	can_sleep = HAL_CAN_IsSleepActive(hcan);	//don*t wakeup without this status request
 }
 /*void HAL_CAN_TxCpltCallback(CAN_HandleTypeDef* hcan)
 {
@@ -163,6 +171,9 @@ int main(void)
   /* USER CODE BEGIN WHILE */
 	HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING|CAN_IT_ERROR_WARNING|CAN_IT_ERROR_PASSIVE|CAN_IT_BUSOFF|CAN_IT_LAST_ERROR_CODE|CAN_IT_ERROR);
 	HAL_CAN_RegisterCallback(&hcan, HAL_CAN_RX_FIFO0_MSG_PENDING_CB_ID, HAL_CAN_RxFIFO0MsgPendingCallback);
+	
+	HAL_CAN_ActivateNotification(&hcan,CAN_IT_WAKEUP);
+	HAL_CAN_RegisterCallback(&hcan, HAL_CAN_WAKEUP_FROM_RX_MSG_CB_ID, HAL_CAN_WakeUpFromRxMsgCallback);
 	HAL_CAN_Start(&hcan);
 	freq_a = HAL_RCC_GetHCLKFreq();
 	
@@ -173,18 +184,23 @@ int main(void)
 	TxHeader.DLC = 4;                               // 
      
  counter.can_rx_insec = 0;
+ HAL_DBGMCU_EnableDBGSleepMode();	//DBGMCU->CR |= DBGMCU_CR_DBG_SLEEP;
+ HAL_CAN_RequestSleep(&hcan);
   while (1)
   {
-		
-		if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) != 0)
+		can_sleep = HAL_CAN_IsSleepActive(&hcan);
+		if (!can_sleep)
 		{
-			uSendLimit = 0xFF;
-			do 
+			if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) != 0)
 			{
-				TxStatus = HAL_CAN_AddTxMessage(&hcan, &TxHeader, tx_buf, &TxMailbox);
+				uSendLimit = 0xFF;
+				do 
+				{
+					TxStatus = HAL_CAN_AddTxMessage(&hcan, &TxHeader, tx_buf, &TxMailbox);
+				}
+				while (TxStatus != HAL_OK && uSendLimit--);
+				tx_buf[0]++;
 			}
-			while (TxStatus != HAL_OK && uSendLimit--);
-			tx_buf[0]++;
 		}
 		HAL_Delay(1000);
 		counter.can_rx_insec = counter.can_rx;
